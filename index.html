@@ -1,1 +1,285 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 테트리스 (10x10x10) - Gemini</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: 'Malgun Gothic', sans-serif; }
+        #ui {
+            position: absolute; top: 20px; left: 20px; color: white;
+            background: rgba(0, 0, 0, 0.8); padding: 20px; border-radius: 12px;
+            border: 1px solid #444; pointer-events: none;
+            line-height: 1.6;
+        }
+        kbd {
+            background: #555; border-radius: 4px; padding: 2px 6px;
+            font-size: 0.9em; color: #00ffcc; border-bottom: 2px solid #222;
+        }
+        .score-board { font-size: 1.5em; color: #00ffcc; margin-bottom: 10px; font-weight: bold; }
+        .size-info { color: #ffeb3b; font-size: 0.9em; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
 
+<div id="ui">
+    <div class="score-board">SCORE: <span id="score">0</span></div>
+    <div class="size-info">공간 크기: 10 x 10 x 10</div>
+    <hr style="border:0; border-top:1px solid #444;">
+    <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> : 수평 이동 (X, Z축)</p>
+    <p><kbd>Space</kbd> : 빠른 하강</p>
+    <p><kbd>Q</kbd><kbd>E</kbd> : X축 회전 | <kbd>R</kbd><kbd>T</kbd> : Y축 회전 | <kbd>F</kbd><kbd>G</kbd> : Z축 회전</p>
+    <p style="font-size: 0.85em; color: #aaa;">* 마우스 드래그: 시점 회전<br>* 휠: 확대/축소</p>
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    // --- 게임 설정 (수정된 부분: 10x10x10) ---
+    const GRID_SIZE = 10;   
+    const GRID_HEIGHT = 10;
+    let score = 0;
+    let board = []; 
+    const tempV = new THREE.Vector3();
+
+    // 씬 및 카메라 설정
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0a0a0a);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // 카메라 위치 조정 (10x10 공간에 맞춰 더 멀리 배치)
+    const controls = new OrbitControls(camera, renderer.domElement);
+    camera.position.set(18, 18, 18);
+    controls.target.set(0, GRID_HEIGHT / 2, 0);
+    controls.update();
+
+    // 조명
+    scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+    const pointLight = new THREE.PointLight(0xffffff, 1.2);
+    pointLight.position.set(15, 25, 15);
+    scene.add(pointLight);
+
+    // 가이드 격자 (바닥면 강조)
+    const gridHelper = new THREE.BoxHelper(new THREE.Mesh(new THREE.BoxGeometry(GRID_SIZE, GRID_HEIGHT, GRID_SIZE)));
+    gridHelper.position.y = GRID_HEIGHT / 2;
+    gridHelper.material.color.set(0x00ffcc);
+    scene.add(gridHelper);
+
+    // 바닥면에 보조 그리드 추가
+    const floorGrid = new THREE.GridHelper(GRID_SIZE, GRID_SIZE, 0x00ffcc, 0x222222);
+    floorGrid.position.y = 0;
+    scene.add(floorGrid);
+
+    // 보드 데이터 초기화
+    for (let y = 0; y < GRID_HEIGHT; y++) {
+        board[y] = Array(GRID_SIZE).fill(0).map(() => Array(GRID_SIZE).fill(0));
+    }
+
+    // 블록 모양 정의 (3D 폴리큐브)
+    const shapes = [
+        [[0,0,0], [1,0,0], [0,1,0], [0,0,1]], // tripod
+        [[0,0,0], [1,0,0], [2,0,0], [1,1,0]], // T
+        [[0,0,0], [1,0,0], [0,1,0], [1,1,0]], // Cube
+        [[0,0,0], [0,1,0], [0,2,0], [0,3,0]], // I-Line
+        [[0,0,0], [1,0,0], [1,1,0], [2,1,0]], // Z
+    ];
+
+    let currentPiece = null;
+    let currentPos = { x: 0, y: 0, z: 0 };
+
+    function createPiece() {
+        const shape = shapes[Math.floor(Math.random() * shapes.length)];
+        const color = new THREE.Color().setHSL(Math.random(), 0.8, 0.6);
+        const group = new THREE.Group();
+        
+        shape.forEach(p => {
+            const geometry = new THREE.BoxGeometry(0.96, 0.96, 0.96);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: color, 
+                shininess: 100,
+                transparent: true, 
+                opacity: 0.9 
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(p[0], p[1], p[2]);
+            group.add(cube);
+        });
+
+        currentPiece = { mesh: group, shape: shape };
+        // 생성 위치를 중앙으로 조정
+        currentPos = { x: Math.floor(GRID_SIZE/2) - 1, y: GRID_HEIGHT - 3, z: Math.floor(GRID_SIZE/2) - 1 };
+        updatePiecePosition();
+        scene.add(group);
+
+        if (checkCollision()) {
+            alert("GAME OVER! 최종 점수: " + score);
+            location.reload();
+        }
+    }
+
+    function updatePiecePosition() {
+        if (!currentPiece) return;
+        currentPiece.mesh.position.set(
+            currentPos.x - GRID_SIZE/2 + 0.5, 
+            currentPos.y + 0.5, 
+            currentPos.z - GRID_SIZE/2 + 0.5
+        );
+    }
+
+    function checkCollision() {
+        for (let child of currentPiece.mesh.children) {
+            child.getWorldPosition(tempV);
+            
+            const absX = Math.round(tempV.x + GRID_SIZE / 2 - 0.5);
+            const absY = Math.round(tempV.y - 0.5);
+            const absZ = Math.round(tempV.z + GRID_SIZE / 2 - 0.5);
+
+            if (absX < 0 || absX >= GRID_SIZE || absZ < 0 || absZ >= GRID_SIZE || absY < 0) return true;
+            if (absY < GRID_HEIGHT && board[absY][absX][absZ] !== 0) return true;
+        }
+        return false;
+    }
+
+    function move(dx, dy, dz) {
+        currentPos.x += dx;
+        currentPos.y += dy;
+        currentPos.z += dz;
+        updatePiecePosition();
+
+        if (checkCollision()) {
+            currentPos.x -= dx;
+            currentPos.y -= dy;
+            currentPos.z -= dz;
+            updatePiecePosition();
+            if (dy < 0) lockPiece();
+            return false;
+        }
+        return true;
+    }
+
+    function rotatePiece(axis, angle) {
+        currentPiece.mesh.rotation[axis] += angle;
+        currentPiece.mesh.updateMatrixWorld();
+        if (checkCollision()) {
+            currentPiece.mesh.rotation[axis] -= angle;
+        }
+    }
+
+    function lockPiece() {
+        const children = [...currentPiece.mesh.children];
+        children.forEach(child => {
+            child.getWorldPosition(tempV);
+            const absX = Math.round(tempV.x + GRID_SIZE / 2 - 0.5);
+            const absY = Math.round(tempV.y - 0.5);
+            const absZ = Math.round(tempV.z + GRID_SIZE / 2 - 0.5);
+            
+            if (absY < GRID_HEIGHT && absY >= 0) {
+                const staticCube = child.clone();
+                // 위치를 정수 단위로 딱 떨어지게 고정
+                staticCube.position.x = Math.round(tempV.x * 2) / 2;
+                staticCube.position.y = Math.round(tempV.y * 2) / 2;
+                staticCube.position.z = Math.round(tempV.z * 2) / 2;
+
+                scene.add(staticCube);
+                board[absY][absX][absZ] = staticCube;
+            }
+        });
+
+        scene.remove(currentPiece.mesh);
+        checkLines();
+        createPiece();
+    }
+
+    function checkLines() {
+        // 10x10 면적(100칸)이 꽉 찼는지 검사
+        for (let y = 0; y < GRID_HEIGHT; y++) {
+            let isFull = true;
+            for (let x = 0; x < GRID_SIZE; x++) {
+                for (let z = 0; z < GRID_SIZE; z++) {
+                    if (board[y][x][z] === 0) { isFull = false; break; }
+                }
+                if (!isFull) break;
+            }
+
+            if (isFull) {
+                score += 1000; // 10x10을 채우는 것은 어려우므로 더 높은 점수 부여
+                document.getElementById('score').innerText = score;
+                
+                for (let x = 0; x < GRID_SIZE; x++) {
+                    for (let z = 0; z < GRID_SIZE; z++) {
+                        scene.remove(board[y][x][z]);
+                        board[y][x][z] = 0;
+                    }
+                }
+                
+                for (let ty = y + 1; ty < GRID_HEIGHT; ty++) {
+                    for (let tx = 0; tx < GRID_SIZE; tx++) {
+                        for (let tz = 0; tz < GRID_SIZE; tz++) {
+                            if (board[ty][tx][tz] !== 0) {
+                                board[ty][tx][tz].position.y -= 1;
+                                board[ty-1][tx][tz] = board[ty][tx][tz];
+                                board[ty][tx][tz] = 0;
+                            }
+                        }
+                    }
+                }
+                y--;
+            }
+        }
+    }
+
+    window.addEventListener('keydown', (e) => {
+        const key = e.key.toLowerCase();
+        if (key === 'a') move(-1, 0, 0);
+        if (key === 'd') move(1, 0, 0);
+        if (key === 'w') move(0, 0, -1);
+        if (key === 's') move(0, 0, 1);
+        if (key === ' ') move(0, -1, 0);
+        
+        if (key === 'q') rotatePiece('x', Math.PI/2);
+        if (key === 'e') rotatePiece('x', -Math.PI/2);
+        if (key === 'r') rotatePiece('y', Math.PI/2);
+        if (key === 't') rotatePiece('y', -Math.PI/2);
+        if (key === 'f') rotatePiece('z', Math.PI/2);
+        if (key === 'g') rotatePiece('z', -Math.PI/2);
+    });
+
+    let lastTime = 0;
+    let dropTimer = 0;
+    function animate(time = 0) {
+        const deltaTime = time - lastTime;
+        lastTime = time;
+        
+        dropTimer += deltaTime;
+        if (dropTimer > 800) { // 공간이 넓으므로 속도를 약간 빠르게 조정 (1000ms -> 800ms)
+            move(0, -1, 0);
+            dropTimer = 0;
+        }
+
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+    }
+
+    createPiece();
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
